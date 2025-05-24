@@ -2,8 +2,9 @@
 # Imports & Configuration
 # =========================
 import streamlit as st
-import ollama
 from datetime import datetime
+from transformers import pipeline
+import torch
 
 # =========================
 # Session State Management
@@ -24,51 +25,58 @@ if "messages" not in st.session_state:
     })
 
 # =========================
-# Utility Functions
+# AI Model Setup (Free Alternative)
+# =========================
+@st.cache_resource
+def load_model():
+    """Load a free, local-running AI model"""
+    return pipeline(
+        "text-generation",
+        model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",  # Free small model
+        device="cpu",
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+    )
+
+# =========================
+# Response Generation
 # =========================
 def generate_response(prompt):
-    """Generate a friendly, supportive response using the current session memory."""
+    """Generate responses using the free local model"""
     memory = st.session_state.memory
-
-    therapist_prompt = f"""You are a friendly, supportive assistant chatting with {memory['user_name'] or "the user"}.
-
+    
+    therapist_prompt = f"""You are a supportive listener talking to {memory['user_name'] or "someone"}.
+    
 Guidelines:
-1. Keep a warm, approachable, and respectful tone.
-2. Show empathy and understanding, but don't be overly familiar or intrusive.
-3. Use the user's preferred name or form of address.
-4. Focus on listening, encouragement, and gentle reflection.
-5. Be mindful of sensitive topics: {memory['sensitive_topics']}
-6. Response style: {memory['preferred_style']}
-
-Example responses:
-- "Thanks for sharing that. Want to talk a bit more about it?"
-- "That sounds tough. How have you been coping?"
-- "I'm here for you—feel free to say whatever's on your mind."
+1. Tone: {memory['preferred_style']}
+2. Sensitive topics: {memory['sensitive_topics']}
+3. Be warm but professional
+4. Keep responses under 3 sentences
 
 Respond to:
 "{prompt}" """
 
-    response = ollama.chat(
-        model="mistral",
-        messages=[
-            {"role": "system", "content": therapist_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        options={'temperature': 0.5}
-    )
-    return response['message']['content']
+    try:
+        generator = load_model()
+        response = generator(
+            therapist_prompt,
+            max_new_tokens=100,
+            temperature=0.7,
+            do_sample=True
+        )
+        # Extract just the assistant's response
+        return response[0]['generated_text'].split("\n")[-1].strip()
+    except Exception as e:
+        return "I'm having trouble responding. Could you rephrase that?"
 
 # =========================
-# UI Layout & Page Config
+# UI Layout
 # =========================
-st.set_page_config(page_title="Professional Listener", layout="centered")
-st.title("Emotional Support Chat")
-st.caption("A relaxed, safe space to talk things through.")
-
-# (No custom CSS. Streamlit's default styling is used.)
+st.set_page_config(page_title="Supportive Listener", layout="centered")
+st.title("Supportive Listener")
+st.caption("A safe space to share your thoughts")
 
 # =========================
-# Sidebar: User Preferences
+# Sidebar Preferences
 # =========================
 with st.sidebar:
     st.subheader("Your Preferences")
@@ -76,62 +84,52 @@ with st.sidebar:
         "What should I call you?",
         st.session_state.memory["user_name"]
     )
-
+    
     st.session_state.memory["preferred_style"] = st.selectbox(
-        "Chat style",
+        "Conversation style",
         ["gentle", "direct", "neutral"],
         index=["gentle", "direct", "neutral"].index(st.session_state.memory["preferred_style"])
     )
-
+    
     st.session_state.memory["sensitive_topics"] = st.text_area(
-        "Anything you'd like me to be extra careful about? (optional)",
+        "Topics to handle carefully (optional)",
         "\n".join(st.session_state.memory["sensitive_topics"])
     ).split("\n")
 
-    st.markdown("---")
-    st.caption("These help me make our chat more comfortable for you.")
-
 # =========================
-# Main Chat Display
+# Chat Display
 # =========================
-st.markdown("### Our Conversation")
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        # Always display the message content, even if it's empty
         st.write(msg["content"])
         st.caption(msg["time"])
 
 # =========================
-# Chat Input & Response Handling
+# Message Handling
 # =========================
-prompt = st.chat_input("What's on your mind?")
-
-if prompt is not None:
-    if prompt.strip():
-        # Add user message
-        st.session_state.messages.append({
-            "role": "user",
-            "content": prompt,
-            "time": datetime.now().strftime("%H:%M")
-        })
-        # Rerun immediately to show the user's message in the UI before generating a response
-        st.rerun()
-
-# After rerun, check if the last message is from the user and not yet responded to
-if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+if prompt := st.chat_input("What's on your mind?"):
+    # Add user message
+    st.session_state.messages.append({
+        "role": "user",
+        "content": prompt,
+        "time": datetime.now().strftime("%H:%M")
+    })
+    
+    # Generate and show response
     with st.chat_message("assistant"):
-        with st.spinner("Listening carefully..."):
-            response = generate_response(st.session_state.messages[-1]["content"])
+        with st.spinner("Thinking..."):
+            response = generate_response(prompt)
             st.write(response)
+    
+    # Add assistant response
     st.session_state.messages.append({
         "role": "assistant",
         "content": response,
         "time": datetime.now().strftime("%H:%M")
     })
-    st.rerun()
 
 # =========================
-# Actions
+# Conversation Management
 # =========================
 st.markdown("---")
 if st.button("Clear Conversation"):
